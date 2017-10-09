@@ -12,7 +12,7 @@
 -injars  libs
 -outjars  bin/classes-processed.jar
 
--libraryjars third-party/android-sdk-linux/platforms/android-23/android.jar
+-libraryjars third-party/android-sdk-linux/platforms/android-25/android.jar
 #-libraryjars /usr/local/android-sdk/add-ons/google_apis-7_r01/libs/maps.jar
 # ...
 
@@ -155,12 +155,9 @@
 # -keep public interface mypackage.MyInterface
 # -keep public class * implements mypackage.MyInterface
 
--keepclassmembers public class com.metasploit.stage.PayloadTrustManager {
-    public static void useFor(java.net.URLConnection);
-}
-
--keep,allowobfuscation public class net.dirtybox.util.stringobfuscator.Helper {
+-keep,allowobfuscation public class net.dirtybox.util.obfuscation.StringObfuscator {
     public static java.lang.String obfuscate(java.lang.String);
+    public static java.lang.String unobfuscate(java.lang.String);
 }
 
 # If you wish, you can let the optimization step remove Android logging calls.

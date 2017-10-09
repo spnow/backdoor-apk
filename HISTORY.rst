@@ -3,6 +3,67 @@
 Release History
 ---------------
 
+0.2.3 (2017-10-09)
+++++++++++++++++++
+
+**Improvements**
+
+- Provided an option to keep original Android manifest permissions or to merge with those found in the Metasploit Android APK
+
+**Bug Fixes**
+
+- Fixed a bug that resulted in duplicate permissions in the Android manifest when merged
+
+0.2.2 (2017-03-31)
+++++++++++++++++++
+
+**Improvements**
+
+- Upgraded const-string obfuscation technique used in RAT smali files
+
+0.2.1 (2017-03-10)
+++++++++++++++++++
+
+**Improvements**
+
+- Updated third-party software and tools
+
+**Bug Fixes**
+
+- Fixed smali file to hook logic to properly handle shorthand class names in activity elements in the APK manifest
+- Fixed smali file to hook logic to handle cases where a super class must be hooked
+
+0.2.0 (2017-02-17)
+++++++++++++++++++
+
+**Bug Fixes**
+
+- Fixed smali file to hook logic to handle multidex APK files
+
+0.1.9 (2016-12-30)
+++++++++++++++++++
+
+**Improvements**
+
+- Dynamic obfuscation of const-string values in RAT smali code
+
+**Bug Fixes**
+
+- Fixed invalid date bug in the original cert info extraction logic
+
+0.1.8 (2016-12-20)
+++++++++++++++++++
+
+**Improvements**
+
+- The generated signing cert uses the valid from date and validity value from the original APK cert
+
+**Bug Fixes**
+
+- Fixed various issues with the original cert info extraction logic
+- Fixed minor issue with the proguard configuration file
+- Fixed namelist values that include dashes causing Apktool recompilation errors
+
 0.1.7 (2016-11-30)
 ++++++++++++++++++
 
